@@ -232,7 +232,8 @@ def process_chunk(chunk): # chunk: Tuple
         # print(chunk)
         msg_chunk, metadata = chunk[2]
         # 流式回复内容
-        if isinstance(msg_chunk, AIMessageChunk) and metadata.get("langgraph_node") in ["build_prompt_and_invoke", "rag_pipeline"]:
+        # if isinstance(msg_chunk, AIMessageChunk) and metadata.get("tags") in ["build_prompt_and_invoke", "rag_pipeline"]:
+        if isinstance(msg_chunk, AIMessageChunk) and metadata.get("tags") == ["stream"]:
             chunk_response["content"] = msg_chunk.content
             chunk_response["node"] = metadata.get("langgraph_node")
             return chunk_response

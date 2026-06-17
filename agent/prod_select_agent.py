@@ -85,6 +85,52 @@ def build_product_tree_text(mapping: dict) -> str:
             lines.append(f"    产品系列：{'、'.join(series_list)}")
     return "\n".join(lines)
 
+def selected_specs_to_text(selected_specs):
+    recommand_specs_mapping = {
+        'categories': "产品类别",
+        # 'series': '产品系列',
+        'EtherCAT_bus_axis_number': 'EtherCAT总线控制轴数',
+        'RS232_number': '串口RS232的数量',
+        'ethernet_protocol': '以太网协议',
+        'expansion_card': '扩展卡',
+        'programming_language': '编程语言',
+        'motion_control_function': '运动控制功能',
+        # "reasoning": '**参数推荐理由**'
+    }
+    lines = []
+
+    for key in recommand_specs_mapping.keys():
+
+        # selected_specs 没有该字段时跳过
+        if key not in selected_specs:
+            continue
+
+        value = selected_specs[key]
+
+        # 跳过字段
+        if key in ["need_confirm"]:
+            continue
+
+        # 空值
+        if value in [None, "", [], {}]:
+            value_text = "(不做要求)"
+
+        # IntCompareSpec
+        elif isinstance(value, dict) and "value" in value:
+            compare = value.get("compare", "")
+            val = value.get("value", "")
+            value_text = f"{compare}{val}"
+
+        # list
+        elif isinstance(value, list):
+            value_text = "、".join(map(str, value))
+
+        else:
+            value_text = str(value)
+
+        lines.append(f"- {recommand_specs_mapping[key]}：{value_text}")
+
+    return "\n".join(lines)
 
 class Agentstate(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
@@ -182,9 +228,8 @@ async def init(state: Agentstate):
             "selected_category_lv1": '',
             "selected_category_lv2": '',
             "selected_specs": {},  # 存放当前抽取到的参数状态字典
-            "selected_specs_to_text": '',
             "need_confirm": False,  # 标记用户是否已经确认
-            "selected_product": '',  # 选取的产品型号详情
+            "product_json": '',  # 选取的产品型号详情
         }
     }
 
@@ -195,6 +240,9 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
 
     dialogue_text = Tools.format_messages(messages)
     if len(dialogue_text) >= 3500:
+        if len(dialogue_text) >= 10000: # 超限防御
+            dialogue_text = dialogue_text[:10000]
+
         summary_msg = [
             SystemMessage(content=(
                 "你是一个对话摘要器。请基于多轮对话生成一段中文摘要，要求："
@@ -208,7 +256,7 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
             )),
             HumanMessage(content=f"请总结以下对话：\n\n{dialogue_text}")
         ]
-        summary = await llm_nothink.ainvoke(summary_msg)
+        summary = await llm_nothink.ainvoke(summary_msg, config={"tags": ["_compress_messages"]})
         human_msg = HumanMessage(content=messages[-1].content)
         compressed = [
             SystemMessage(content=f"历史对话摘要：\n{summary.content}"),
@@ -220,20 +268,17 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
 
 async def rag_pipeline(state: Agentstate, config: RunnableConfig):
     rag_agent = await create_rag_agent()
-    agent_state = {
-        "messages": state["messages"],
-    }
-    rag_agent_state = await rag_agent.ainvoke(agent_state, {"recursion_limit": 15})
+
+    rag_agent_state = await rag_agent.ainvoke({"messages": state["messages"]}, {"recursion_limit": 15})
 
     markdown = rag_agent_state['cache']['markdown']
     rag_prompt = RAG_PROMPT.replace("{rag_context}", markdown)
 
-    # 构建仅供rag调用的临时消息
-    sys_msg = SystemMessage(content=rag_prompt)
-    temp_messages = [sys_msg] + state["messages"]
-    llm = config['configurable']['llm']
+    temp_messages = [SystemMessage(content=rag_prompt)] + state["messages"]
 
-    response = await llm.ainvoke(temp_messages)
+    chain = RunnableLambda(_compress_messages) | RunnableLambda(lambda x: x["messages"]) | config["configurable"]['llm_nothink']
+
+    response = await chain.ainvoke({"messages": temp_messages}, config={"tags": ["stream"]})
 
     # 清除response中think内容以压缩上下文
     if "<think>" or "</think>" in response.content:  # 清除response中think内容以压缩上下文
@@ -252,7 +297,7 @@ async def rag_pipeline(state: Agentstate, config: RunnableConfig):
 async def after_rag_pipeline(state: Agentstate, config: RunnableConfig):
     messages = state["messages"]
 
-    response_text = "\n\n当前正在产品选型，**回复【1】继续选型** 或 **回复【0】退出选型**，如有疑问请随时补充。"
+    response_text = "\n\n（当前正在产品选型，**回复【1】继续选型** 或 **回复【0】退出选型**，如您仍有疑问请随时补充）"
     user_reply = interrupt({
         "status": "waiting_for_confirmation",
         "response_text": response_text,
@@ -267,7 +312,7 @@ async def after_rag_pipeline(state: Agentstate, config: RunnableConfig):
         )
 
     elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复【我要选型】发起产品选型流程。"
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -303,26 +348,32 @@ async def confirm_category(state: Agentstate, config: RunnableConfig):
         selected_category_lv2 = '中型PLC'
     elif user_reply.strip() in ['3', '【3】', '大型PLC']:
         selected_category_lv2 = '大型PLC'
-    elif user_reply.strip() in ['4', '【4】']:
-        response_text = "请描述您的应用场景或需求，由小英为您评估推荐"
+    elif user_reply.strip() in ['9', '【9】']:
+        response_text = "请描述您的问题，小英将为您解答~（如暂无疑问，回复【1】继续选型）"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
         })
         messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        return Command(
-            update={
-                "cache": {
-                    "current_node": "confirm_category"
+        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+            return Command(
+                update={'messages': messages},
+                goto="confirm_category"
+            )
+        else:
+            return Command(
+                update={
+                    "cache": {
+                        "current_node": "confirm_category"
+                    },
+                    'messages': messages
                 },
-                'messages': messages
-            },
-            goto='rag_pipeline'
-        )
+                goto='rag_pipeline'
+            )
 
     elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复【我要选型】发起产品选型流程。"
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -358,25 +409,32 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
 
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-    if user_reply.strip() in ['1', '【1】']: # 如您暂时无法选择并进一步咨询，请回复【1】
-        response_text = "请描述您的应用场景或需求，由小英为您评估推荐"
+    if user_reply.strip() in ['9', '【9】']: # 如您暂时无法选择并进一步咨询，请回复【9】
+        response_text = "请描述您的问题，小英将为您解答~（如暂无疑问，回复【1】继续选型）"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
         })
         messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        return Command(
-            update={
-                "cache": {
-                    "current_node": "confirm_specs"
+        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+            return Command(
+                update={'messages': messages},
+                goto="confirm_specs"
+            )
+        else:
+            return Command(
+                update={
+                    "cache": {
+                        "current_node": "confirm_specs"
+                    },
+                    'messages': messages
                 },
-                'messages': messages
-            },
-            goto='rag_pipeline'
-        )
+                goto='rag_pipeline'
+            )
+
     elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']: # 如需退出产品选型流程，请回复【0】
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复【我要选型】发起产品选型流程。"
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -385,6 +443,7 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
             },
             goto=END
         )
+
     else:
         return Command(
             update={
@@ -421,72 +480,21 @@ async def check_specs(state: Agentstate):
     messages = state["messages"]
     selected_specs = state["cache"]["selected_specs"]
 
-    def build_selected_specs_to_text(selected_specs):
-        recommand_specs_mapping = {
-            'categories': "产品类别",
-            # 'series': '产品系列',
-            'EtherCAT_bus_axis_number': 'EtherCAT总线控制轴数',
-            'RS232_number': '串口RS232的数量',
-            'ethernet_protocol': '以太网协议',
-            'expansion_card': '扩展卡',
-            'programming_language': '编程语言',
-            'motion_control_function': '运动控制功能',
-            # "reasoning": '**参数推荐理由**'
-        }
-        lines = []
-
-        for key in recommand_specs_mapping.keys():
-
-            # selected_specs 没有该字段时跳过
-            if key not in selected_specs:
-                continue
-
-            value = selected_specs[key]
-
-            # 跳过字段
-            if key in ["need_confirm"]:
-                continue
-
-            # 空值
-            if value in [None, "", [], {}]:
-                value_text = "(不做要求)"
-
-            # IntCompareSpec
-            elif isinstance(value, dict) and "value" in value:
-                compare = value.get("compare", "")
-                val = value.get("value", "")
-                value_text = f"{compare}{val}"
-
-            # list
-            elif isinstance(value, list):
-                value_text = "、".join(map(str, value))
-
-            else:
-                value_text = str(value)
-
-            lines.append(f"- {recommand_specs_mapping[key]}：{value_text}")
-
-        return "\n".join(lines)
-
-    selected_specs_to_text = build_selected_specs_to_text(selected_specs)
+    specs_text = selected_specs_to_text(selected_specs)
 
     fake_stream_text = (
-        "系统已结合您的需求描述，初步推荐以下选型参数。请您确认是否符合需求：\n\n"
+        "系统已结合您的描述推荐以下选型参数，请您进行确认：\n\n"
     )
 
-    fake_stream_text += selected_specs_to_text
+    fake_stream_text += specs_text
 
     fake_stream_text += (
         "\n\n接下来，您可以:"
-        "\n\n**如需更改参数，可回复【1】；**"
-        "\n\n**如需无需修改，回复【2】；**"
-        "\n\n**如需进一步咨询，回复【3】；**"
-        "\n\n**如需退出选型环节，回复【0】；**"
+        "\n\n**如需更改选型参数，请回复【1】；**"
+        "\n\n**如已确认，回复【2】；**"
+        "\n\n**如有疑问，请回复【9】，如需退出选型，回复【0】**"
     )
 
-    # 1. 触发动态中断！
-    # 程序运行到这里会挂起，并将字典内的状态返回给前端/API
-    # 等待外部传入 resume 数据后，user_reply 就会被赋值为用户的输入
     response_text = fake_stream_text
     user_reply = interrupt({
         "status": "waiting_for_confirmation",
@@ -495,7 +503,8 @@ async def check_specs(state: Agentstate):
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
     if user_reply.strip() in ['1', '【1】']: # 如需更改参数，可回复【1】
-        response_text = "请您描述需要修改的内容，小英将为您进行更改"
+        response_text = (f"当前选型参数如下：{specs_text}"
+                         f"\n\n请您描述需要修改的选型参数，小英将为您进行更改：")
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
@@ -509,19 +518,18 @@ async def check_specs(state: Agentstate):
             goto='extract_specs'
         )
 
-    elif user_reply.strip() in ['2', '【2】']: # 如需无需修改，回复【2】
+    elif user_reply.strip() in ['2', '【2】']: # 如已确认选型参数，请回复【2】
         return Command(
             update={
                 "messages": messages,
                 "cache": {
                     "selected_specs": selected_specs,
-                    "selected_specs_to_text": selected_specs_to_text,
                 }
             },
             goto="search_db"
         )
-    elif user_reply.strip() in ['3', '【3】']: # 如需进一步咨询，回复【3】
-        response_text = "请描述您的应用场景或需求，由小英为您评估推荐"
+    elif user_reply.strip() in ['9', '【9】']: # 如需进一步咨询，回复【9】
+        response_text = "请描述您的问题，小英将为您解答：\n\n如无疑问，回复【1】将继续选型"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
@@ -529,18 +537,24 @@ async def check_specs(state: Agentstate):
         messages.extend(
             [AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        return Command(
-            update={
-                "cache": {
-                    "current_node": "check_specs"
+        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+            return Command(
+                update={'messages': messages},
+                goto="check_specs"
+            )
+        else:
+            return Command(
+                update={
+                    "cache": {
+                        "current_node": "check_specs"
+                    },
+                    'messages': messages
                 },
-                'messages': messages
-            },
-            goto='rag_pipeline'
-        )
+                goto='rag_pipeline'
+            )
 
     elif user_reply.strip() in ['0', '【0】']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复【我要选型】发起产品选型流程。"
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -559,7 +573,6 @@ async def search_db(state: Agentstate):
     selected_category_lv1 = state["cache"]["selected_category_lv1"]
     selected_category_lv2 = state["cache"]["selected_category_lv2"]
     selected_specs = state["cache"]["selected_specs"]
-    selected_specs_to_text = state["cache"]["selected_specs_to_text"]
 
     tables_mapping = {
         "PLC": 'PLC_all_series',
@@ -678,48 +691,38 @@ async def search_db(state: Agentstate):
         selected_specs['motion_control_function']
     )
 
-    # 最终查询展示字段
-    PLC_FIELD_MAP = {
-        "product_id": "产品型号",
-        "categories": "产品类别",
-        # "series": "产品系列",
-        "name": "产品名称",
-        # "type": "产品类型",
-        # "status": "产品状态",
-        # "rated_voltage": "额定电压",
+    if not df.empty: # 查询到相关产品型号
+        # 最终查询展示字段
+        PLC_FIELD_MAP = {
+            "product_id": "产品型号",
+            "categories": "产品类别",
+            # "series": "产品系列",
+            "name": "产品名称",
+            # "type": "产品类型",
+            # "status": "产品状态",
+            # "rated_voltage": "额定电压",
 
-        # "EtherCAT_number": "EtherCAT主站数量",
-        # "EtherCAT_ring_control": "EtherCAT环网控制",
-        # "EtherNET_number": "以太网口数量",
-        "RS232_number": "RS232串口数量",
-        # "RS485_number": "RS485串口数量",
+            # "EtherCAT_number": "EtherCAT主站数量",
+            # "EtherCAT_ring_control": "EtherCAT环网控制",
+            # "EtherNET_number": "以太网口数量",
+            "RS232_number": "RS232串口数量",
+            # "RS485_number": "RS485串口数量",
 
-        "EtherCAT_bus_axis_number": "EtherCAT总线轴数",
-        "motion_control_function": "运动控制功能",
+            "EtherCAT_bus_axis_number": "EtherCAT总线轴数",
+            "motion_control_function": "运动控制功能",
 
-        "ethernet_protocol": "以太网协议",
+            "ethernet_protocol": "以太网协议",
 
-        # "program_size": "程序容量",
-        # "config_platform": "组态平台",
-        "programming_language": "编程语言",
-        'expansion_card': '扩展卡',
-        # "external_dimensions": "外形尺寸"
-    }
+            # "program_size": "程序容量",
+            # "config_platform": "组态平台",
+            "programming_language": "编程语言",
+            'expansion_card': '扩展卡',
+            # "external_dimensions": "外形尺寸"
+        }
 
-    if df.empty:
-        prod_json_text = "（未匹配到相关产品型号信息。）"
-
-        final_reply = f"""
-    当前已根据确认的选型参数：
-    \n\n{selected_specs_to_text}
-        \n\n当前根据已确认的选型参数，暂未查询到匹配的产品型号。
-    可能由于筛选条件较严格，导致暂无符合条件的产品。
-    是否可以适当减少部分筛选要求，以便进一步帮助筛选合适产品？
-    """
-    else:
-        prod_df = df[list(PLC_FIELD_MAP.keys())].where(pd.notnull(df), None).rename(columns=PLC_FIELD_MAP).fillna(
+        prod_df = df[list(PLC_FIELD_MAP.keys())].where(pd.notnull(df), None).rename(
+            columns=PLC_FIELD_MAP).fillna(
             '')
-        # prod_md_text = prod_df.to_markdown(index=False)
         prod_json = {}
         for _, row in prod_df.iterrows():
             row_dict = row.to_dict()
@@ -727,31 +730,96 @@ async def search_db(state: Agentstate):
             if product_id:
                 prod_json[str(product_id)] = row_dict
 
+        return {
+            "cache": {
+                "product_json": prod_json
+            }
+        }
+
+    else: # 未匹配到产品型号，返回空json
+        return {
+            "cache": {
+                "product_json": {}
+            }
+        }
+
+async def after_search_db(state: Agentstate):
+    product_json = state["cache"]["product_json"]
+    messages = state["messages"]
+    selected_category_lv2 = state["cache"]["selected_category_lv2"]
+    specs_text = selected_specs_to_text(state["cache"]["selected_specs"])
+
+
+
+    if not product_json: # 无匹配产品型号
+        response_text = "抱歉~ 当前选型参数暂无匹配产品型号。\n如需修改选型参数**回复【1】**，如需退出选型**回复【0】**"
+        user_reply = interrupt({
+            "status": "waiting_for_confirmation",
+            "response_text": response_text,
+        })
+        messages.extend(
+            [AIMessage(content=response_text), HumanMessage(content=user_reply)])
+
+        if user_reply.strip() in ['1', '【1】']:  # 如需更改参数，可回复【1】
+            response_text = f"当前选型参数：\n{specs_text}\n**请您描述需要修改的选型参数，小英将为您进行更改：**"
+            user_reply = interrupt({
+                "status": "waiting_for_confirmation",
+                "response_text": response_text,
+            })
+            messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
+
+            return Command(
+                update={
+                    'messages': messages
+                },
+                goto='extract_specs'
+            )
+
+        elif user_reply.strip() in ['0', '【0】']: # 退出选型**回复【0】
+            fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+            return Command(
+                update={
+                    "cache": {
+                        "fake_stream_text": fake_stream_text,
+                    }
+                },
+                goto=END
+            )
+
+        else:
+            return Command(
+                update={
+                    "messages": messages,
+                },
+                goto="after_search_db"
+            )
+
+
+    else:
         prod_json_text = json.dumps(
-            prod_json,
+            product_json,
             ensure_ascii=False,
             indent=2
         )
 
         final_reply = f"""
-    **当前已根据确认的选型参数**：
-    \n\n{selected_specs_to_text}
-    \n\n**筛选出产品信息如下**：
-    <div style="white-space: pre-wrap;">
-    {prod_json_text}
-    </div>
-    \n\n**已根据确认的选型参数匹配到如下产品型号：{'、'.join(prod_df['产品型号'])}**。如需进一步了解某个产品的详细功能参数、应用场景或选型建议，您可以继续告诉我，如需重新发起产品选型流程，请回复【我要选型】。
-    """
+        已为您匹配如下产品型号，详情如下：
+        <div style="white-space: pre-wrap;">
+        {prod_json_text}
+        </div>
+        \n\n已结束产品选型，并为您匹配 **【{selected_category_lv2}】** 产品型号( **共计{len(product_json)}个** )：**{'、'.join(list(product_json.keys()))}**。
+        \n如需进一步了解产品说明详细功能参数、应用场景或选型建议，您可以随时告诉我，如需重新发起产品选型流程，可回复 **【我要选型】** 。
+        """
 
-    return Command(
-        update={
-            "cache": {
-                "fake_stream_text": final_reply,
-                "selected_product": prod_json_text
-            }
-        },
-        goto=END
-    )
+        return Command(
+            update={
+                "cache": {
+                    "fake_stream_text": final_reply,
+                    "product_json": prod_json_text
+                }
+            },
+            goto=END
+        )
 
 async def create_prod_select_agent():
     subgraph = StateGraph(Agentstate)
@@ -763,9 +831,10 @@ async def create_prod_select_agent():
     subgraph.add_node("confirm_specs", confirm_specs)
     subgraph.add_node("extract_specs", extract_specs)
     subgraph.add_node("check_specs", check_specs)
-    subgraph.add_node("search_db", search_db)
     subgraph.add_node("rag_pipeline", rag_pipeline)
     subgraph.add_node("after_rag_pipeline", after_rag_pipeline)
+    subgraph.add_node("search_db", search_db)
+    subgraph.add_node("after_search_db", after_search_db)
 
     # start
     subgraph.add_edge(START, "init")
@@ -776,10 +845,11 @@ async def create_prod_select_agent():
     # specs
     subgraph.add_edge("extract_specs", "check_specs")
 
+    # rag_pipeline
     subgraph.add_edge("rag_pipeline", "after_rag_pipeline")
 
     # search_db
-    subgraph.add_edge("search_db", END)
+    subgraph.add_edge("search_db", "after_search_db")
 
     subgraph_compiled = subgraph.compile()
 

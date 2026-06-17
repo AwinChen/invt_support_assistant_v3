@@ -16,7 +16,7 @@ if ragflow_path not in sys.path:
 
 from dotenv import load_dotenv
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.messages import SystemMessage, AIMessageChunk
 # from langchain_core.pydantic_v1 import BaseModel, AIMessageChunk
 from pydantic import BaseModel, Field
@@ -134,13 +134,16 @@ async def init_graph(state: MainState, config: RunnableConfig):
     }
 
 
-async def context_compressor(state: MainState, config: RunnableConfig):
-    memory_messages = state["memory_messages"]
+async def _compress_messages(input_dict: dict, config: RunnableConfig):
+    """在 chain 内对 messages 做压缩，返回压缩后的输入 dict"""
+    messages = input_dict["messages"]
     llm_nothink = config['configurable']['llm_nothink']
 
-    # 兜底防御，防止上下文超限
-    dialogue_text = Tools.format_messages(memory_messages)
-    if len(dialogue_text) >= 2500:
+    dialogue_text = Tools.format_messages(messages)
+    if len(dialogue_text) >= 3500:
+        if len(dialogue_text) >= 10000: # 超限防御
+            dialogue_text = dialogue_text[:10000]
+
         summary_msg = [
             SystemMessage(content=(
                 "你是一个对话摘要器。请基于多轮对话生成一段中文摘要，要求："
@@ -154,18 +157,14 @@ async def context_compressor(state: MainState, config: RunnableConfig):
             )),
             HumanMessage(content=f"请总结以下对话：\n\n{dialogue_text}")
         ]
-        summary = await llm_nothink.ainvoke(summary_msg)
-        summary_text = summary.content
-
-        human_msg = HumanMessage(content=memory_messages[-1].content)
-        memory_messages = [
-            SystemMessage(content=f"历史对话摘要：\n{summary_text}"),
+        summary = await llm_nothink.ainvoke(summary_msg, config={"tags": ["_compress_messages"]})
+        human_msg = HumanMessage(content=messages[-1].content)
+        compressed = [
+            SystemMessage(content=f"历史对话摘要：\n{summary.content}"),
             human_msg
         ]
-
-    return {
-        "memory_messages": memory_messages,
-    }
+        return {"messages": compressed}
+    return input_dict   # 没超限，原样透传
 
 
 # class Router_struct(BaseModel):
@@ -189,9 +188,9 @@ async def router(state: MainState, config: RunnableConfig):
     # 　初始化状态机
     memory_messages = state.get("memory_messages", [])
     user_question = memory_messages[-1].content
-    if user_question in ['我要选型', '【我要选型】', '【产品选型】']:
+    if user_question.strip() in ['我要选型', '【我要选型】', '【产品选型】']:
         router_workflow = '产品选型工作流'
-    elif user_question in ['查看物联网云平台视频', '【查看物联网云平台视频】']:
+    elif user_question.strip() in ['查看物联网云平台视频', '【查看物联网云平台视频】']:
         router_workflow = "查看物联网云平台视频"
     else:
         router_workflow = "无匹配"
@@ -261,30 +260,22 @@ async def build_prompt_and_invoke(state: MainState, config: RunnableConfig):
     # 变量获取
     memory_messages = state.get("memory_messages", [])
     workflow = state["router_workflow"]
-    llm = config['configurable']['llm']
+    llm = config['configurable']['llm_nothink']
+
 
     # 不同工作流的上下文工程
     if workflow == "产品选型工作流":
         cache = state['prod_select_agent_state']["cache"]
         fake_stream_text = cache.get("fake_stream_text", "")
 
-        if fake_stream_text:
-            content = await fake_stream_output(fake_stream_text)
-            response = AIMessage(content=content)
-        # else:
-        #     reask_prompt = cache["reask_prompt"]
-        #     sys_msg = SystemMessage(content=reask_prompt)
-        #     temp_messages = [sys_msg] + memory_messages
-        #
-        #     response = await llm.ainvoke(temp_messages)
+        content = await fake_stream_output(fake_stream_text)
+        response = AIMessage(content=content)
 
     elif workflow == '查看物联网云平台视频':
         content = await fake_stream_output(GET_VIDEO_REPLY)
         response = AIMessage(content=content)
 
-
     else:  # RAG工作流，搜知识库
-        # RAG提示词构建：
         markdown = state['rag_agent_state']['cache']['markdown']
         rag_prompt = (
             RAG_PROMPT.replace("{datetime_now}", state["start_time"].strftime("%Y年%m月%d日%H时%M分%S秒"))
@@ -292,9 +283,18 @@ async def build_prompt_and_invoke(state: MainState, config: RunnableConfig):
         )
 
         # 构建仅供rag调用的临时消息
-        sys_msg = SystemMessage(content=rag_prompt)
-        temp_messages = [sys_msg] + memory_messages
-        response = await llm.ainvoke(temp_messages)
+        markdown = state['rag_agent_state']['cache']['markdown']
+        rag_prompt = (
+            RAG_PROMPT.replace("{datetime_now}", state["start_time"].strftime("%Y年%m月%d日%H时%M分%S秒"))
+            .replace("{rag_context}", markdown)
+        )
+
+        temp_messages = [SystemMessage(content=rag_prompt)] + memory_messages
+
+        chain = RunnableLambda(_compress_messages) | RunnableLambda(lambda x: x["messages"]) | config["configurable"][
+            'llm_nothink']
+
+        response = await chain.ainvoke({"messages": temp_messages}, config={"tags": ["stream"]})
 
     return {
         "response": response,
@@ -392,7 +392,7 @@ def build_async_graph(checkpointer=None):
     async_invt_ai = StateGraph(MainState)
 
     async_invt_ai.add_node("init_graph", init_graph)
-    async_invt_ai.add_node("context_compressor", context_compressor)
+    # async_invt_ai.add_node("context_compressor", context_compressor)
     async_invt_ai.add_node("router", router)
     async_invt_ai.add_node("rag_agent", rag_agent)
     async_invt_ai.add_node("prod_select_agent", prod_select_agent)
@@ -400,8 +400,8 @@ def build_async_graph(checkpointer=None):
     async_invt_ai.add_node("memory_manage", memory_manage)
 
     async_invt_ai.add_edge(START, "init_graph")
-    async_invt_ai.add_edge("init_graph", "context_compressor")
-    async_invt_ai.add_edge("context_compressor", "router")
+    async_invt_ai.add_edge("init_graph", "router")
+    # async_invt_ai.add_edge("context_compressor", "router")
     async_invt_ai.add_conditional_edges("router", router_condition, ["rag_agent", "prod_select_agent"])
     async_invt_ai.add_edge("rag_agent", "build_prompt_and_invoke")
     async_invt_ai.add_edge("prod_select_agent", "build_prompt_and_invoke")
