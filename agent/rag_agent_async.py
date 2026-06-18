@@ -93,7 +93,7 @@ async def rag_search(
     res = await asyncio.to_thread(
         search_main,
         query,
-        [RAG_TENANT_ID, IWOSCENE_TENANT_ID, FAQ_TENANT_ID, VIDEO_TENANT_ID, "plc_product_series"],
+        [RAG_TENANT_ID, IWOSCENE_TENANT_ID, FAQ_TENANT_ID, VIDEO_TENANT_ID, "plc_product_series", "cpq"],
         config['configurable']['embedding_model'],
         config['configurable']['rerank_model'],
         TOPK,

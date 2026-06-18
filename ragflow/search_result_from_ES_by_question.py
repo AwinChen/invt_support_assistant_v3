@@ -556,7 +556,7 @@ if __name__ == "__main__":
     question = "TS635 详细参数 产品规格 使用说明"
     result = search_main(
         question,
-        [RAG_TENANT_ID, IWOSCENE_TENANT_ID, FAQ_TENANT_ID, VIDEO_TENANT_ID, "plc_product_series"],
+        [RAG_TENANT_ID, IWOSCENE_TENANT_ID, FAQ_TENANT_ID, VIDEO_TENANT_ID, "plc_product_series", "cpq"],
         embedding_model=embedding_model,
         rerank_model=rerank_model,
         topk=TOPK,

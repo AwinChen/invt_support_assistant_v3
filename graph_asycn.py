@@ -139,10 +139,13 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
     messages = input_dict["messages"]
     llm_nothink = config['configurable']['llm_nothink']
 
+    # 保留messages第一条系统提示词
+    first_system_msg = messages[0] if isinstance(messages[0], SystemMessage) else SystemMessage(content='')
+
     dialogue_text = Tools.format_messages(messages)
-    if len(dialogue_text) >= 3500:
-        if len(dialogue_text) >= 10000: # 超限防御
-            dialogue_text = dialogue_text[:10000]
+
+    if len(dialogue_text) >= 10000:
+        dialogue_text = dialogue_text[-7500:]
 
         summary_msg = [
             SystemMessage(content=(
@@ -159,12 +162,15 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
         ]
         summary = await llm_nothink.ainvoke(summary_msg, config={"tags": ["_compress_messages"]})
         human_msg = HumanMessage(content=messages[-1].content)
+
         compressed = [
+            first_system_msg,
             SystemMessage(content=f"历史对话摘要：\n{summary.content}"),
             human_msg
         ]
         return {"messages": compressed}
-    return input_dict   # 没超限，原样透传
+
+    return input_dict  # 没超限，原样透传
 
 
 # class Router_struct(BaseModel):
@@ -344,13 +350,13 @@ async def memory_manage(state: MainState, config: RunnableConfig):
     # 存储各代理日志
     if state["router_workflow"] == "产品选型工作流":
         log["prod_select_agent_cache"] = json.dumps(
-            state["prod_select_agent_state"]["cache"],
+            state["prod_select_agent_state"].get("cache"),
             ensure_ascii=False,
             indent=2
         )
 
-    else:
-        cache = state["rag_agent_state"]["cache"]
+    elif state["router_workflow"] == "无匹配":
+        cache = state["rag_agent_state"].get("cache")
         log["rag_agent_markdown"] = cache['markdown']
         log["rag_agent_query"] = cache['query']
 
@@ -402,7 +408,7 @@ def build_async_graph(checkpointer=None):
     async_invt_ai.add_edge(START, "init_graph")
     async_invt_ai.add_edge("init_graph", "router")
     # async_invt_ai.add_edge("context_compressor", "router")
-    async_invt_ai.add_conditional_edges("router", router_condition, ["rag_agent", "prod_select_agent"])
+    async_invt_ai.add_conditional_edges("router", router_condition, ["rag_agent", "prod_select_agent", "build_prompt_and_invoke"])
     async_invt_ai.add_edge("rag_agent", "build_prompt_and_invoke")
     async_invt_ai.add_edge("prod_select_agent", "build_prompt_and_invoke")
     async_invt_ai.add_edge("build_prompt_and_invoke", "memory_manage")

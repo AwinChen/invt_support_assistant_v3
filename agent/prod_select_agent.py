@@ -238,10 +238,13 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
     messages = input_dict["messages"]
     llm_nothink = config['configurable']['llm_nothink']
 
+    # 保留messages第一条系统提示词
+    first_system_msg = messages[0] if isinstance(messages[0], SystemMessage) else SystemMessage(content='')
+
     dialogue_text = Tools.format_messages(messages)
-    if len(dialogue_text) >= 3500:
-        if len(dialogue_text) >= 10000: # 超限防御
-            dialogue_text = dialogue_text[:10000]
+
+    if len(dialogue_text) >= 10000:
+        dialogue_text = dialogue_text[-7000:]
 
         summary_msg = [
             SystemMessage(content=(
@@ -258,11 +261,14 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
         ]
         summary = await llm_nothink.ainvoke(summary_msg, config={"tags": ["_compress_messages"]})
         human_msg = HumanMessage(content=messages[-1].content)
+
         compressed = [
+            first_system_msg,
             SystemMessage(content=f"历史对话摘要：\n{summary.content}"),
             human_msg
         ]
         return {"messages": compressed}
+
     return input_dict   # 没超限，原样透传
 
 
@@ -410,7 +416,7 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
     if user_reply.strip() in ['9', '【9】']: # 如您暂时无法选择并进一步咨询，请回复【9】
-        response_text = "请描述您的问题，小英将为您解答~（如暂无疑问，回复【1】继续选型）"
+        response_text = "请描述您的问题，小英将为您解答：\n\n(如无疑问，回复【1】将继续选型)"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
@@ -490,8 +496,7 @@ async def check_specs(state: Agentstate):
 
     fake_stream_text += (
         "\n\n接下来，您可以:"
-        "\n\n**如需更改选型参数，请回复【1】；**"
-        "\n\n**如已确认，回复【2】；**"
+        "\n\n**如需更改选型参数，请回复【1】，如已确认，回复【2】；**"
         "\n\n**如有疑问，请回复【9】，如需退出选型，回复【0】**"
     )
 
@@ -503,7 +508,7 @@ async def check_specs(state: Agentstate):
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
     if user_reply.strip() in ['1', '【1】']: # 如需更改参数，可回复【1】
-        response_text = (f"当前选型参数如下：{specs_text}"
+        response_text = (f"当前选型参数如下：\n\n{specs_text}"
                          f"\n\n请您描述需要修改的选型参数，小英将为您进行更改：")
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
@@ -529,7 +534,7 @@ async def check_specs(state: Agentstate):
             goto="search_db"
         )
     elif user_reply.strip() in ['9', '【9】']: # 如需进一步咨询，回复【9】
-        response_text = "请描述您的问题，小英将为您解答：\n\n如无疑问，回复【1】将继续选型"
+        response_text = "请描述您的问题，小英将为您解答：\n\n(如无疑问，回复【1】将继续选型)"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
@@ -761,7 +766,7 @@ async def after_search_db(state: Agentstate):
             [AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
         if user_reply.strip() in ['1', '【1】']:  # 如需更改参数，可回复【1】
-            response_text = f"当前选型参数：\n{specs_text}\n**请您描述需要修改的选型参数，小英将为您进行更改：**"
+            response_text = f"当前选型参数：\n{specs_text}\n\n**请您描述需要修改的选型参数，小英将为您进行更改：**"
             user_reply = interrupt({
                 "status": "waiting_for_confirmation",
                 "response_text": response_text,
@@ -807,7 +812,7 @@ async def after_search_db(state: Agentstate):
         <div style="white-space: pre-wrap;">
         {prod_json_text}
         </div>
-        \n\n已结束产品选型，并为您匹配 **【{selected_category_lv2}】** 产品型号( **共计{len(product_json)}个** )：**{'、'.join(list(product_json.keys()))}**。
+        \n\n已结束产品选型，并为您匹配 **“{selected_category_lv2}”** 产品型号( **共计{len(product_json)}个** )：**{'、'.join(list(product_json.keys()))}**。
         \n如需进一步了解产品说明详细功能参数、应用场景或选型建议，您可以随时告诉我，如需重新发起产品选型流程，可回复 **【我要选型】** 。
         """
 

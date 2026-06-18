@@ -12,9 +12,9 @@ Environment="PATH=/root/miniconda3/envs/invt_agent/bin"
 # 添加强制使用 GNU OpenMP 或顺序执行的环境变量（解决 MKL 报错的核心）
 Environment="MKL_THREADING_LAYER=GNU"
 
-WorkingDirectory=/home/script/invt_agent_demo/invt_support_assistant
+WorkingDirectory=/home/script/invt_agent_demo/invt_support_assistant_v3
 
-ExecStart=/root/miniconda3/envs/invt_agent/bin/uvicorn run_server_withStream:app --host 0.0.0.0 --port 8501 --workers 1
+ExecStart=/root/miniconda3/envs/invt_agent/bin/uvicorn run_invt_ai_api:app --host 0.0.0.0 --port 8501 --workers 1
 
 # 重启策略：始终重启
 Restart=always
@@ -24,9 +24,6 @@ RestartSec=5
 KillSignal=SIGINT
 # 停止超时时间（根据你的流式响应调整，单位秒）
 TimeoutStopSec=300
-
-# StandardOutput=file:/home/script/invt_agent_demo/app_log/streamlit.log
-# StandardError=file:/home/script/invt_agent_demo/app_log/streamlit_error.log
 
 [Install]
 WantedBy=multi-user.target

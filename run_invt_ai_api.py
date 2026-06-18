@@ -107,13 +107,13 @@ async def lifespan(app: FastAPI):
         logger.info(f"Embedding模型加载完成")
 
         # 加载rerank模型
-        # logger.info("开始加载Rerank模型...")
-        # rerank_model = DefaultRerank(
-        #     key='',
-        #     model_name=RERANK_MODEL,
-        #     devices="cuda:0"
-        # )
-        # logger.info(f"Rerank模型加载完成")
+        logger.info("开始加载Rerank模型...")
+        rerank_model = DefaultRerank(
+            key='',
+            model_name=RERANK_MODEL,
+            devices="cuda:1"
+        )
+        logger.info(f"Rerank模型加载完成")
 
         with MongoDBSaver.from_conn_string(
                 MONGO_URL,
@@ -189,7 +189,7 @@ def process_chunk(chunk): # chunk: Tuple
     """
     namespace_tuple = chunk[0]
     chunk_type = chunk[1]
-    print(chunk)
+    # print(chunk)
 
     # 初始化输出属性
     chunk_response = {
@@ -204,7 +204,7 @@ def process_chunk(chunk): # chunk: Tuple
             return chunk_response
 
         elif "fake_stream" in custom_data:
-            chunk_response["chunk_type"] = "messages" # 这里对应后端接口字段适配，后端展示AI回复内容格式为 {'chunk_type': 'messages', 'content': '产品选型相'}
+            chunk_response["chunk_type"] = "fast_reply" # 这里对应后端接口字段适配，后端展示AI回复内容格式为 {'chunk_type': 'fast_reply', 'content': '产品选型相'}
             chunk_response["content"] = custom_data["fake_stream"]
             return chunk_response
 
