@@ -19,7 +19,6 @@ if ragflow_path not in sys.path:
 
 from langchain_core.tools import tool, InjectedToolCallId
 from langchain_openai import ChatOpenAI
-from langgraph.config import get_stream_writer
 from langchain_community.chat_models import ChatTongyi
 from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, AnyMessage
 
@@ -61,10 +60,6 @@ MYSQL_CONFIG = {
     "autocommit": True,
 }
 
-
-# 获取异步流式输出写入器
-async def get_async_stream_writer():
-    return get_stream_writer()
 
 
 product_category_mapping = {
@@ -273,6 +268,7 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
 
 
 async def rag_pipeline(state: Agentstate, config: RunnableConfig):
+
     rag_agent = await create_rag_agent()
 
     rag_agent_state = await rag_agent.ainvoke({"messages": state["messages"]}, {"recursion_limit": 15})

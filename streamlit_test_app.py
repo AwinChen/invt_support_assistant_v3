@@ -80,7 +80,7 @@ if prompt := st.chat_input("请输入您的问题 (例如：产品选型相关�
 
                                     # 状态提示处理
                                     if chunk_type == "ai_status":
-                                        status_placeholder.caption(f"⏳ 状态: {data.get('ai_status')}")
+                                        status_placeholder.caption(f"⏳{data.get('ai_status')}")
                                     elif chunk_type == "rag_docs_count":
                                         status_placeholder.caption(f"📚 检索到文档数量: {data.get('rag_docs_count')}")
 

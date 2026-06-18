@@ -15,7 +15,6 @@ if ragflow_path not in sys.path:
 
 from langchain_core.tools import tool, InjectedToolCallId
 from langchain_openai import ChatOpenAI
-from langgraph.config import get_stream_writer
 from langchain_community.chat_models import ChatTongyi
 from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, AnyMessage
 
@@ -27,6 +26,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import tools_condition, ToolNode, InjectedState
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import Command
+from langgraph.prebuilt import ToolRuntime
 from langchain_core.runnables import RunnableConfig
 
 
@@ -52,11 +52,6 @@ IWOSCENE_TENANT_ID = os.getenv("IWOSCENE_TENANT_ID")
 
 
 
-# 获取异步流式输出写入器
-async def get_async_stream_writer():
-    return get_stream_writer()
-
-
 class Agentstate(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     agent: Any  # 构建的代理
@@ -78,6 +73,7 @@ class rag_search_InputSchema(BaseModel):
 @tool("rag_search", args_schema=rag_search_InputSchema)
 async def rag_search(
         query: str,
+        runtime: ToolRuntime,  # LangGraph 自动注入这个参数
         tool_call_id: Annotated[str, InjectedToolCallId],
         state: Annotated[Agentstate, InjectedState],
         config: RunnableConfig
@@ -86,8 +82,7 @@ async def rag_search(
     使用用户转换后的高质量中文检索 query，在向量数据库中进行检索并返回文档列表。
     return: Command
     """
-    writer = await get_async_stream_writer()
-    writer({"custom_stream": "正在检索知识库..."})
+    runtime.stream_writer({"ai_status": "正在检索知识库..."})
 
     # 异步执行搜索
     res = await asyncio.to_thread(
@@ -103,10 +98,10 @@ async def rag_search(
     if res and res.get('chunks'):
         chunks = res.get('chunks')
         markdowns = Cks_to_Markdown().metadata_to_prompts(chunks)
-        writer({"custom_stream": f"找到 {len(chunks)} 篇知识库资料..."})
+        # writer({"custom_stream": f"找到 {len(chunks)} 篇知识库资料..."})
     else:
         chunks = res.get('chunks', [])
-        writer({"custom_stream": f"未检索到知识库关联信息..."})
+        # writer({"custom_stream": f"未检索到知识库关联信息..."})
         markdowns = ''
 
     cache = state["cache"]

@@ -63,13 +63,9 @@ mongo_client = MongoClient(MONGO_URL)
 db = mongo_client[MONGO_DATABASE]
 collection = db["qta_log"]
 
-# 获取异步流式输出写入器
-async def get_async_stream_writer():
-    return get_stream_writer()
-
 
 async def fake_stream_output(text, chunk_size=100):
-    writer = await get_async_stream_writer()
+    writer = get_stream_writer()
     content = ''
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
@@ -109,6 +105,8 @@ class MainState(TypedDict):
 
 
 async def init_graph(state: MainState, config: RunnableConfig):
+    writer = get_stream_writer()
+    writer({"ai_status": "正在思考..."})
     # llm = ChatTongyi(model="qwen3.5-27b", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", temperature=0,
     #                  api_key="sk-db286ac12d9940ddb26dd8413279041a", streaming=True)
     # llm_nothink = ChatTongyi(model="qwen3.5-27b", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", temperature=0,
@@ -188,9 +186,6 @@ async def _compress_messages(input_dict: dict, config: RunnableConfig):
 
 
 async def router(state: MainState, config: RunnableConfig):
-    writer = await get_async_stream_writer()
-    writer({"ai_status": "正在理解用户意图..."})
-
     # 　初始化状态机
     memory_messages = state.get("memory_messages", [])
     user_question = memory_messages[-1].content
@@ -223,8 +218,6 @@ def router_condition(state: MainState):
 node: rag_agent
 """
 async def rag_agent(state: MainState):  # rag_agent节点
-    writer = await get_async_stream_writer()
-    writer({"ai_status": "正在检索知识库..."})
 
     rag_agent = await create_rag_agent()
     agent_state = {
@@ -243,8 +236,8 @@ async def rag_agent(state: MainState):  # rag_agent节点
 node: prod_select_agent
 """
 async def prod_select_agent(state: MainState):  # rag_agent节点
-    writer = await get_async_stream_writer()
-    writer({"ai_status": "正在进入产品选型流程..."})
+    writer = get_stream_writer()
+    writer({"ai_status": "正在产品选型..."})
 
     prod_select_agent = await create_prod_select_agent()
     agent_state = {
@@ -261,7 +254,8 @@ async def prod_select_agent(state: MainState):  # rag_agent节点
 node: build_prompt_and_invoke
 """
 async def build_prompt_and_invoke(state: MainState, config: RunnableConfig):
-    writer = await get_async_stream_writer()
+    writer = get_stream_writer()
+    writer({"ai_status": "正在回复..."})
 
     # 变量获取
     memory_messages = state.get("memory_messages", [])
@@ -288,13 +282,6 @@ async def build_prompt_and_invoke(state: MainState, config: RunnableConfig):
             .replace("{rag_context}", markdown)
         )
 
-        # 构建仅供rag调用的临时消息
-        markdown = state['rag_agent_state']['cache']['markdown']
-        rag_prompt = (
-            RAG_PROMPT.replace("{datetime_now}", state["start_time"].strftime("%Y年%m月%d日%H时%M分%S秒"))
-            .replace("{rag_context}", markdown)
-        )
-
         temp_messages = [SystemMessage(content=rag_prompt)] + memory_messages
 
         chain = RunnableLambda(_compress_messages) | RunnableLambda(lambda x: x["messages"]) | config["configurable"][
@@ -312,7 +299,7 @@ async def build_prompt_and_invoke(state: MainState, config: RunnableConfig):
 node: memory_manage
 """
 async def memory_manage(state: MainState, config: RunnableConfig):
-    writer = await get_async_stream_writer()
+    writer = get_stream_writer()
 
     memory_messages = state.get("memory_messages", [])
     response = state.get("response")
@@ -407,7 +394,6 @@ def build_async_graph(checkpointer=None):
 
     async_invt_ai.add_edge(START, "init_graph")
     async_invt_ai.add_edge("init_graph", "router")
-    # async_invt_ai.add_edge("context_compressor", "router")
     async_invt_ai.add_conditional_edges("router", router_condition, ["rag_agent", "prod_select_agent", "build_prompt_and_invoke"])
     async_invt_ai.add_edge("rag_agent", "build_prompt_and_invoke")
     async_invt_ai.add_edge("prod_select_agent", "build_prompt_and_invoke")

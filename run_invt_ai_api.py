@@ -107,13 +107,13 @@ async def lifespan(app: FastAPI):
         logger.info(f"Embedding模型加载完成")
 
         # 加载rerank模型
-        logger.info("开始加载Rerank模型...")
-        rerank_model = DefaultRerank(
-            key='',
-            model_name=RERANK_MODEL,
-            devices="cuda:1"
-        )
-        logger.info(f"Rerank模型加载完成")
+        # logger.info("开始加载Rerank模型...")
+        # rerank_model = DefaultRerank(
+        #     key='',
+        #     model_name=RERANK_MODEL,
+        #     devices="cuda:1"
+        # )
+        # logger.info(f"Rerank模型加载完成")
 
         with MongoDBSaver.from_conn_string(
                 MONGO_URL,
