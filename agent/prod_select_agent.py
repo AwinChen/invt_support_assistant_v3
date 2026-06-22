@@ -36,6 +36,7 @@ from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMe
 from prompt.prompt_for_prod_select_agent import *
 
 import aiomysql
+from utils.tools import Tools
 
 # import pymysql
 # from pymysql.connections import Connection
@@ -126,6 +127,8 @@ def selected_specs_to_text(selected_specs):
         lines.append(f"- {recommand_specs_mapping[key]}：{value_text}")
 
     return "\n".join(lines)
+
+
 
 class Agentstate(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
@@ -307,14 +310,14 @@ async def after_rag_pipeline(state: Agentstate, config: RunnableConfig):
 
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-    if user_reply.strip() in ['1', '【1】']: # 回复【1】继续选型
+    if Tools.clean_menu_reply(user_reply) == '1': # 回复【1】继续选型
         return Command(
             update={'messages': messages},
             goto=state["cache"]["current_node"]
         )
 
-    elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+    elif Tools.clean_menu_reply(user_reply) in ['0', '结束选型', '退出', '取消']:
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复 **【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -344,13 +347,13 @@ async def confirm_category(state: Agentstate, config: RunnableConfig):
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
 
-    if user_reply.strip() in ['1', '【1】', '小型PLC']:
+    if Tools.clean_menu_reply(user_reply) == '1':
         selected_category_lv2 = '小型PLC'
-    elif user_reply.strip() in ['2', '【2】', '中型PLC']:
+    elif Tools.clean_menu_reply(user_reply) == '2':
         selected_category_lv2 = '中型PLC'
-    elif user_reply.strip() in ['3', '【3】', '大型PLC']:
+    elif Tools.clean_menu_reply(user_reply) == '3':
         selected_category_lv2 = '大型PLC'
-    elif user_reply.strip() in ['9', '【9】']:
+    elif Tools.clean_menu_reply(user_reply) == '9':
         response_text = "请描述您的问题，小英将为您解答~（如暂无疑问，回复【1】继续选型）"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
@@ -358,7 +361,7 @@ async def confirm_category(state: Agentstate, config: RunnableConfig):
         })
         messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+        if Tools.clean_menu_reply(user_reply) == '1': # 如暂无疑问，请**回复【1】**继续选型
             return Command(
                 update={'messages': messages},
                 goto="confirm_category"
@@ -374,8 +377,8 @@ async def confirm_category(state: Agentstate, config: RunnableConfig):
                 goto='rag_pipeline'
             )
 
-    elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+    elif Tools.clean_menu_reply(user_reply) in ['0', '结束选型', '退出', '取消']:
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复 **【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -411,7 +414,7 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
 
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-    if user_reply.strip() in ['9', '【9】']: # 如您暂时无法选择并进一步咨询，请回复【9】
+    if Tools.clean_menu_reply(user_reply) == '9': # 如您暂时无法选择并进一步咨询，请回复【9】
         response_text = "请描述您的问题，小英将为您解答：\n\n(如无疑问，回复【1】将继续选型)"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
@@ -419,7 +422,7 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
         })
         messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+        if Tools.clean_menu_reply(user_reply) == '1': # 如暂无疑问，请**回复【1】**继续选型
             return Command(
                 update={'messages': messages},
                 goto="confirm_specs"
@@ -435,8 +438,8 @@ async def confirm_specs(state: Agentstate, config: RunnableConfig):
                 goto='rag_pipeline'
             )
 
-    elif user_reply.strip() in ['0', '【0】', '结束选型', '退出', '取消']: # 如需退出产品选型流程，请回复【0】
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+    elif Tools.clean_menu_reply(user_reply) in ['0', '结束选型', '退出', '取消']: # 如需退出产品选型流程，请回复【0】
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复 **【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -503,9 +506,9 @@ async def check_specs(state: Agentstate):
     })
     messages.extend([AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-    if user_reply.strip() in ['1', '【1】']: # 如需更改参数，可回复【1】
+    if Tools.clean_menu_reply(user_reply) == '1': # 如需更改参数，可回复【1】
         response_text = (f"当前选型参数如下：\n\n{specs_text}"
-                         f"\n\n请您描述需要修改的选型参数，小英将为您进行更改：")
+                         f"\n\n**请您描述需要修改的选型参数，小英将为您进行更改：**")
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
             "response_text": response_text,
@@ -519,7 +522,7 @@ async def check_specs(state: Agentstate):
             goto='extract_specs'
         )
 
-    elif user_reply.strip() in ['2', '【2】']: # 如已确认选型参数，请回复【2】
+    elif Tools.clean_menu_reply(user_reply) == '2': # 如已确认选型参数，请回复【2】
         return Command(
             update={
                 "messages": messages,
@@ -529,7 +532,7 @@ async def check_specs(state: Agentstate):
             },
             goto="search_db"
         )
-    elif user_reply.strip() in ['9', '【9】']: # 如需进一步咨询，回复【9】
+    elif Tools.clean_menu_reply(user_reply) == '9': # 如需进一步咨询，回复【9】
         response_text = "请描述您的问题，小英将为您解答：\n\n(如无疑问，回复【1】将继续选型)"
         user_reply = interrupt({
             "status": "waiting_for_confirmation",
@@ -538,7 +541,7 @@ async def check_specs(state: Agentstate):
         messages.extend(
             [AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        if user_reply.strip() in ['1', '【1】']: # 如暂无疑问，请**回复【1】**继续选型
+        if Tools.clean_menu_reply(user_reply) == '1': # 如暂无疑问，请**回复【1】**继续选型
             return Command(
                 update={'messages': messages},
                 goto="check_specs"
@@ -554,8 +557,8 @@ async def check_specs(state: Agentstate):
                 goto='rag_pipeline'
             )
 
-    elif user_reply.strip() in ['0', '【0】']:
-        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+    elif Tools.clean_menu_reply(user_reply) in ['0', '结束选型', '退出', '取消']:
+        fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复 **【我要选型】** 重新发起产品选型流程。"
         return Command(
             update={
                 "cache": {
@@ -761,7 +764,7 @@ async def after_search_db(state: Agentstate):
         messages.extend(
             [AIMessage(content=response_text), HumanMessage(content=user_reply)])
 
-        if user_reply.strip() in ['1', '【1】']:  # 如需更改参数，可回复【1】
+        if Tools.clean_menu_reply(user_reply) == '1':  # 如需更改参数，可回复【1】
             response_text = f"当前选型参数：\n{specs_text}\n\n**请您描述需要修改的选型参数，小英将为您进行更改：**"
             user_reply = interrupt({
                 "status": "waiting_for_confirmation",
@@ -776,8 +779,8 @@ async def after_search_db(state: Agentstate):
                 goto='extract_specs'
             )
 
-        elif user_reply.strip() in ['0', '【0】']: # 退出选型**回复【0】
-            fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接 **回复【我要选型】** 重新发起产品选型流程。"
+        elif Tools.clean_menu_reply(user_reply) in ['0', '结束选型', '退出', '取消']: # 退出选型**回复【0】
+            fake_stream_text = "已结束产品选型，如您后续仍有选型需求，可直接回复 **【我要选型】** 重新发起产品选型流程。"
             return Command(
                 update={
                     "cache": {

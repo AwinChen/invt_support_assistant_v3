@@ -189,9 +189,9 @@ async def router(state: MainState, config: RunnableConfig):
     # 　初始化状态机
     memory_messages = state.get("memory_messages", [])
     user_question = memory_messages[-1].content
-    if user_question.strip() in ['我要选型', '【我要选型】', '【产品选型】']:
+    if Tools.clean_menu_reply(user_question) in ['我要选型', '产品选型']:
         router_workflow = '产品选型工作流'
-    elif user_question.strip() in ['查看物联网云平台视频', '【查看物联网云平台视频】']:
+    elif Tools.clean_menu_reply(user_question) in ['查看物联网云平台视频', '查看视频']:
         router_workflow = "查看物联网云平台视频"
     else:
         router_workflow = "无匹配"

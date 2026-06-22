@@ -13,14 +13,21 @@ load_dotenv()
 
 class Tools:
 
+    # ================= 通用工具 =================
     @staticmethod
     def format_messages(messages):
+        """将 messages 对象转为文本 str"""
         context = ''
         for msg in messages:
             context += f"{msg.type}: {msg.content}\n"
         return context
 
-    # data_agent_prompt中间代理聊天记录处理
+    @staticmethod
+    def clean_menu_reply(text: str) -> str:
+        """菜单选项标准化"""
+        return re.sub(r"[【】\[\]（）()\s]+", "", text).strip()
+
+    # ================= data_agent 专用工具 =================
     @staticmethod
     def process_data_agent_messages(messages:List[BaseMessage]) -> str:
         context = ''
@@ -34,18 +41,6 @@ class Tools:
             elif isinstance(msg, AIMessage):
                 ai_txt = re.sub("<think>(.?)</think>", "", msg.content)
                 context += f"AI: {ai_txt}\n"
-        return context
-
-    @staticmethod
-    def process_chat_messages(cache_messages: List[BaseMessage]) -> str:
-        context = ''
-        for msg in cache_messages:
-            if isinstance(msg, HumanMessage):
-                context += f"Human: {msg.content}\n"
-            elif isinstance(msg, SystemMessage):
-                context += f"system: {msg.content}\n"
-            elif isinstance(msg, AIMessage):
-                context += f"AI: {msg.content}\n"
         return context
 
     @staticmethod
